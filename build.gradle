@@ -1,0 +1,32 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'ru.vit4liy.modular'
+version = '1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+}
+
+jar {
+    archiveBaseName = 'module-lib'
+    archiveVersion = version
+    archiveClassifier = ''
+
+    manifest {
+        attributes(
+                'Implementation-Title': 'Vit4liy\'s module lib',
+                'Implementation-Version': version
+        )
+    }
+}
