@@ -3,21 +3,27 @@ package ru.vit4liy.modular;
 import ru.vit4liy.modular.exception.ModuleInitializeException;
 import ru.vit4liy.modular.exception.ModuleShutdownException;
 
+import java.io.IOException;
 import java.lang.module.Configuration;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
 public abstract class ModuleLoader {
-    protected final Map<Class<? extends Module>, Module> modules = new HashMap<>();
+    protected final Map<Class<? extends Module>, Module> modules = new ConcurrentHashMap<>();
+    protected final ExecutorService pool;
 
-    public ModuleLoader(boolean pluginsIncluded){
+    public ModuleLoader(ExecutorService pool, boolean pluginsIncluded){
+        this.pool = pool;
         this.loadStandardModules();
         if(pluginsIncluded) this.loadPlugins();
     }
@@ -25,6 +31,12 @@ public abstract class ModuleLoader {
     protected abstract void loadStandardModules() ;
     protected void loadPlugins(){
         Path pluginsDir = Paths.get("plugins");
+        try{
+            if(Files.notExists(pluginsDir)) Files.createDirectory(pluginsDir);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
 
         ModuleFinder pluginsFinder = ModuleFinder.of(pluginsDir);
 
@@ -44,15 +56,15 @@ public abstract class ModuleLoader {
                 .boot()
                 .defineModulesWithOneLoader(pluginsConfiguration, ClassLoader.getSystemClassLoader());
 
-        List<Plugin> services = Plugin.getServices(layer);
+        List<Plugin> services = Plugin.getServices(layer, this);
         for (Plugin plugin : services) {
             System.out.printf("Found plugin %s", plugin.pluginName());
             modules.put(plugin.getClass(), plugin);
         }
     }
 
-    public <T extends Module> T getModule(Class<T> moduleClass) throws ClassNotFoundException{
-        if(!modules.containsKey(moduleClass)) throw new ClassNotFoundException("Module %s not loaded!".formatted(moduleClass.getSimpleName()));
+    public synchronized  <T extends Module> T getModule(Class<T> moduleClass) throws ClassNotFoundException{
+        if(!modules.containsKey(moduleClass)) throw new ClassNotFoundException("Module %s not initialized!".formatted(moduleClass.getSimpleName()));
         return moduleClass.cast(modules.get(moduleClass));
     }
 
@@ -63,11 +75,10 @@ public abstract class ModuleLoader {
     }
 
     public void initModule(Class<? extends Module> moduleClass) throws ModuleInitializeException{
-        if(!modules.containsKey(moduleClass)) throw new ModuleInitializeException("Module %s not loaded!".formatted(moduleClass.getSimpleName()));
+        if(!modules.containsKey(moduleClass)) throw new ModuleInitializeException("Module %s not initialized!".formatted(moduleClass.getSimpleName()));
         Module module = modules.get(moduleClass);
-        System.out.printf("Loading module %s...%n", module.moduleName());
-        module.initialize();
-        System.out.printf("Module %s successfully loaded!%n", module.moduleName());
+        System.out.printf("%s > Initializing module...%n", module.moduleName());
+        pool.submit(module);
     }
 
     public void stopModule(Class<? extends Module> moduleClass) throws ModuleShutdownException{
@@ -75,7 +86,7 @@ public abstract class ModuleLoader {
         Module module = modules.get(moduleClass);
         System.out.printf("Stopping module %s...%n", module.moduleName());
         module.shutdown();
-        System.out.printf("Module %s successfully stopped!%n", module.moduleName());
+        System.out.printf("%s > Module successfully stopped!%n", module.moduleName());
     }
 
 
@@ -83,5 +94,9 @@ public abstract class ModuleLoader {
         for (Class<? extends Module> clazz : modules.keySet()) {
             stopModule(clazz);
         }
+    }
+
+    public synchronized boolean isInit(Class<? extends Module> moduleClass){
+        return modules.containsKey(moduleClass);
     }
 }
