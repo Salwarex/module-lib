@@ -8,12 +8,15 @@ import java.lang.module.Configuration;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
@@ -29,38 +32,63 @@ public abstract class ModuleLoader {
     }
 
     protected abstract void loadStandardModules() ;
-    protected void loadPlugins(){
+    protected void loadPlugins() {
         Path pluginsDir = Paths.get("plugins");
-        try{
-            if(Files.notExists(pluginsDir)) Files.createDirectory(pluginsDir);
+        System.out.println("Search plugins in " + pluginsDir.toAbsolutePath());
+
+        if (Files.notExists(pluginsDir)) {
+            System.out.println("Plugins directory not exist!");
+            return;
+        }
+
+        try (var stream = Files.list(pluginsDir)) {
+            List<Path> jars = stream.filter(path -> path.toString().endsWith(".jar"))
+                    .collect(Collectors.toList());
+
+            System.out.println("Found JARs: " + jars.size());
+
+            for (Path path : jars) {
+                try {
+                    System.out.println("Loading: " + path.getFileName());
+
+                    URL jarUrl = path.toUri().toURL();
+                    URLClassLoader classLoader = new URLClassLoader(
+                            new URL[]{jarUrl},
+                            Plugin.class.getClassLoader()
+                    );
+
+                    List<Class<? extends Plugin>> pluginClasses = ServiceLoader.load(Plugin.class, classLoader)
+                            .stream()
+                            .map(ServiceLoader.Provider::type)
+                            .collect(Collectors.toList());
+
+                    for (Class<? extends Plugin> pluginClass : pluginClasses) {
+                        try {
+                            Plugin plugin = pluginClass.getDeclaredConstructor(ModuleLoader.class).newInstance(this);
+
+                            System.out.printf("  ✓ Plugin loaded successfully: %s%n", plugin.pluginName());
+                            modules.put(pluginClass, plugin);
+
+                        } catch (NoSuchMethodException e) {
+                            System.err.println("  ✗ Error: Class " + pluginClass.getName() + " must have public constructor with ModuleLoader argument");
+                        } catch (Exception e) {
+                            System.err.println("  ✗ Error during loading plugin " + pluginClass.getName());
+                            e.printStackTrace();
+                        }
+                    }
+
+                } catch (Exception e) {
+                    System.err.println("   Critical error load plugin " + path.getFileName());
+                    e.printStackTrace();
+                }
+            }
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Error read plugins directory", e);
         }
 
-
-        ModuleFinder pluginsFinder = ModuleFinder.of(pluginsDir);
-
-        List<String> plugins = pluginsFinder
-                .findAll()
-                .stream()
-                .map(ModuleReference::descriptor)
-                .map(ModuleDescriptor::name)
-                .collect(Collectors.toList());
-
-        Configuration pluginsConfiguration = ModuleLayer
-                .boot()
-                .configuration()
-                .resolve(pluginsFinder, ModuleFinder.of(), plugins);
-
-        ModuleLayer layer = ModuleLayer
-                .boot()
-                .defineModulesWithOneLoader(pluginsConfiguration, ClassLoader.getSystemClassLoader());
-
-        List<Plugin> services = Plugin.getServices(layer, this);
-        for (Plugin plugin : services) {
-            System.out.printf("Found plugin %s", plugin.pluginName());
-            modules.put(plugin.getClass(), plugin);
-        }
+        long pluginCount = modules.values().stream()
+                .filter(m -> m instanceof Plugin).count();
+        System.out.println("Всего загружено плагинов: " + pluginCount);
     }
 
     public synchronized  <T extends Module> T getModule(Class<T> moduleClass) throws ClassNotFoundException{
