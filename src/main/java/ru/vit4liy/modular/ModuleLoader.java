@@ -27,8 +27,11 @@ public abstract class ModuleLoader {
 
     public ModuleLoader(ExecutorService pool, boolean pluginsIncluded){
         this.pool = pool;
+    }
+
+    public void load(){
         this.loadStandardModules();
-        if(pluginsIncluded) this.loadPlugins();
+        this.loadPlugins();
     }
 
     protected abstract void loadStandardModules() ;
